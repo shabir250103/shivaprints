@@ -45,7 +45,7 @@ export function exportReportToExcel(options: ExportReportOptions) {
   const aoa: (string | number)[][] = []
 
   // Header Title
-  aoa.push(['LIBIN PRINTS - MANAGEMENT REPORT'])
+  aoa.push(['SHIVA PRINTS - MANAGEMENT REPORT'])
   aoa.push([title.toUpperCase()])
   aoa.push([`Period: ${periodText} | Generated: ${new Date().toLocaleString('en-IN')}`])
   if (subtitle) aoa.push([subtitle])
@@ -113,7 +113,7 @@ export function exportComprehensiveWorkbookToExcel(options: MultiSheetExportOpti
 
   for (const sheet of sheets) {
     const aoa: (string | number)[][] = []
-    aoa.push([`LIBIN PRINTS - ${sheet.sheetName.toUpperCase()}`])
+    aoa.push([`SHIVA PRINTS - ${sheet.sheetName.toUpperCase()}`])
     aoa.push([`Period: ${periodText} | Generated: ${new Date().toLocaleString('en-IN')}`])
     aoa.push([])
 
@@ -170,7 +170,7 @@ export function exportReportToPdf(options: ExportReportOptions) {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(16)
   doc.setTextColor(255, 255, 255)
-  doc.text('LIBIN PRINTS', 30, 26)
+  doc.text('SHIVA PRINTS', 30, 26)
 
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(9)
@@ -291,13 +291,13 @@ export function exportReportToPdf(options: ExportReportOptions) {
       doc.setFont('helvetica', 'normal')
       doc.setFontSize(8)
       doc.setTextColor(148, 163, 184)
-      doc.text('Confidential & Proprietary • Libin Prints Operational Management System', 30, pageHeight - 18)
+      doc.text('Confidential & Proprietary • Shiva Prints Operational Management System', 30, pageHeight - 18)
       const pageInfo = `Page ${data.pageNumber}`
       doc.text(pageInfo, pageWidth - 30, pageHeight - 18, { align: 'right' })
     },
   })
 
   const dateStr = new Date().toISOString().slice(0, 10)
-  const filename = `LibinPrints_${filenamePrefix.replace(/\s+/g, '_')}_${dateStr}.pdf`
+  const filename = `ShivaPrints_${filenamePrefix.replace(/\s+/g, '_')}_${dateStr}.pdf`
   doc.save(filename)
 }

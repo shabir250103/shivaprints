@@ -26,6 +26,7 @@ import PaymentsRounded from '@mui/icons-material/PaymentsRounded'
 import BusinessRounded from '@mui/icons-material/BusinessRounded'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../api/client'
+import { brandingLogoUrl, useBranding } from '../branding/BrandingContext'
 
 const drawerWidth = 256
 
@@ -48,12 +49,14 @@ const nav = [
   { label: 'Reports', path: '/reports', permission: 'reports', icon: AssessmentRounded },
   { label: 'Company Settings', path: '/company-settings', permission: 'company_settings', icon: BusinessRounded },
   { label: 'Team & Access', path: '/team-access', permission: 'teamaccess', icon: GroupsRounded },
+  { label: 'Branches', path: '/branches', permission: 'users', icon: BusinessRounded },
 ]
 
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
   const { auth, logout, can, canShowPayments } = useAuth()
+  const branding = useBranding()
   const notificationsEnabled = can('notifications')
   const unreadNotifications = useQuery({
     queryKey: ['notifications', 'unread'],
@@ -85,9 +88,9 @@ export function AppShell() {
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: '#17212b', color: 'white' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4, px: 2.5, minHeight: 78 }}>
-        <Box className="brand-mark">LP</Box>
+        {brandingLogoUrl(branding.company_logo_url) ? <Box component="img" src={brandingLogoUrl(branding.company_logo_url)} alt="Company logo" sx={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 1 }} /> : <Box className="brand-mark">SP</Box>}
         <Box>
-          <Typography fontFamily="DM Sans" fontWeight={800} fontSize={17}>Libin Prints</Typography>
+          <Typography fontFamily="DM Sans" fontWeight={800} fontSize={17}>{branding.company_name}</Typography>
           <Typography fontSize={11} color="rgba(255,255,255,.52)" letterSpacing=".08em">WORKFLOW OS</Typography>
         </Box>
       </Box>

@@ -20,6 +20,23 @@ class ActiveManager(models.Manager):
         return super().get_queryset().filter(is_active=True)
 
 
+class Branch(TimeStampedModel):
+    name = models.CharField(max_length=150)
+    code = models.CharField(max_length=30, unique=True)
+    address = models.TextField(blank=True)
+    contact_number = models.CharField(max_length=30, blank=True)
+    email = models.EmailField(blank=True)
+    manager = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='managed_branches')
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        ordering = ('name', 'id')
+        indexes = [models.Index(fields=('is_active', 'name'))]
+
+    def __str__(self):
+        return f'{self.name} ({self.code})'
+
+
 class Department(TimeStampedModel):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=120, unique=True, blank=True)
@@ -61,6 +78,7 @@ class CustomerType(TimeStampedModel):
 
 
 class Customer(TimeStampedModel):
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='customers', null=True, blank=True, db_index=True)
     name = models.CharField(max_length=200, db_index=True)
     mobile = models.CharField(max_length=20, blank=True, db_index=True)
     email = models.EmailField(blank=True)
@@ -261,6 +279,7 @@ class PipelineJob(NumberedJobModel):
         CANCELLED = 'cancelled', 'Cancelled'
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='pipeline_jobs', null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='pipeline_jobs', null=True, blank=True, db_index=True)
     source_enquiry = models.ForeignKey('libinjobs.FollowUp', on_delete=models.SET_NULL, related_name='converted_pipeline_jobs', null=True, blank=True)
     client_name = models.CharField(max_length=200)
     contact_number = models.CharField(max_length=20, blank=True)
@@ -310,6 +329,7 @@ class InJob(NumberedJobModel):
         CANCELLED = 'cancelled', 'Cancelled'
 
     pipeline_job = models.OneToOneField(PipelineJob, on_delete=models.SET_NULL, related_name='in_job', null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='in_jobs', null=True, blank=True, db_index=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='in_jobs', null=True, blank=True)
     customer_name = models.CharField(max_length=200)
     contact_number = models.CharField(max_length=20, blank=True)
@@ -418,6 +438,7 @@ class OutJob(NumberedJobModel):
         CANCELLED = 'cancelled', 'Cancelled'
 
     pipeline_job = models.OneToOneField(PipelineJob, on_delete=models.SET_NULL, related_name='out_job', null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='out_jobs', null=True, blank=True, db_index=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='out_jobs', null=True, blank=True)
     customer_name = models.CharField(max_length=200)
     contact_number = models.CharField(max_length=20, blank=True, null=True)
@@ -526,6 +547,7 @@ class Delivery(TimeStampedModel):
 
     in_job = models.OneToOneField(InJob, on_delete=models.CASCADE, related_name='delivery', null=True, blank=True)
     out_job = models.OneToOneField(OutJob, on_delete=models.CASCADE, related_name='delivery', null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='deliveries', null=True, blank=True, db_index=True)
     delivery_date = models.DateField(null=True, blank=True, db_index=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True)
     address = models.TextField(blank=True)
@@ -579,6 +601,7 @@ class StockMovement(TimeStampedModel):
         WASTAGE = 'wastage', 'Wastage'
 
     stock_item = models.ForeignKey(StockItem, on_delete=models.PROTECT, related_name='movements')
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='stock_movements', null=True, blank=True, db_index=True)
     movement_type = models.CharField(max_length=20, choices=MovementType.choices, db_index=True)
     quantity = models.DecimalField(max_digits=14, decimal_places=2)
     balance_after = models.DecimalField(max_digits=14, decimal_places=2)
@@ -603,6 +626,7 @@ class StockMovement(TimeStampedModel):
 
 
 class MachineCounter(TimeStampedModel):
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='machine_counters', null=True, blank=True, db_index=True)
     machine = models.ForeignKey(Machine, on_delete=models.PROTECT, related_name='counters')
     operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='machine_counters')
     count_date = models.DateField(default=timezone.localdate, db_index=True)
@@ -661,6 +685,7 @@ class WastageRecord(TimeStampedModel):
         OTHER = 'other', 'Other'
 
     wastage_type = models.CharField(max_length=20, choices=WastageType.choices, db_index=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='wastage_records', null=True, blank=True, db_index=True)
     quantity = models.DecimalField(max_digits=14, decimal_places=2)
     machine = models.ForeignKey(Machine, on_delete=models.SET_NULL, related_name='wastage_records', null=True, blank=True)
     stock_item = models.ForeignKey(StockItem, on_delete=models.SET_NULL, related_name='wastage_records', null=True, blank=True)
@@ -684,6 +709,7 @@ class WastageRecord(TimeStampedModel):
 class Invoice(TimeStampedModel):
     in_job = models.OneToOneField(InJob, on_delete=models.CASCADE, related_name='invoice', null=True, blank=True)
     out_job = models.OneToOneField(OutJob, on_delete=models.CASCADE, related_name='invoice', null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='invoices', null=True, blank=True, db_index=True)
     invoice_no = models.CharField(max_length=100, unique=True)
     invoice_date = models.DateField(default=timezone.localdate, db_index=True)
     subtotal = models.DecimalField(max_digits=14, decimal_places=2)
@@ -840,6 +866,7 @@ class CashAccount(TimeStampedModel):
 
 
 class CustomerPayment(TimeStampedModel):
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='customer_payments', null=True, blank=True, db_index=True)
     class PaymentType(models.TextChoices):
         ADVANCE = 'advance', 'Advance'
         PAYMENT = 'payment', 'Payment'
@@ -874,6 +901,7 @@ class CustomerPayment(TimeStampedModel):
 
 
 class VendorPayment(TimeStampedModel):
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='vendor_payments', null=True, blank=True, db_index=True)
     out_job = models.ForeignKey(OutJob, on_delete=models.PROTECT, related_name='vendor_payments')
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     payment_date = models.DateField(default=timezone.localdate, db_index=True)
@@ -959,6 +987,7 @@ class UserProfile(TimeStampedModel):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='libin_profile')
     role = models.ForeignKey(Role, on_delete=models.PROTECT, related_name='users', null=True, blank=True)
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, related_name='users', null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='users', null=True, blank=True, db_index=True)
     is_active = models.BooleanField(default=True, db_index=True)
     show_payment_details = models.BooleanField(default=True)
 
@@ -1027,6 +1056,7 @@ class FollowUp(TimeStampedModel):
 class Quotation(TimeStampedModel):
     source_enquiry = models.ForeignKey('libinjobs.FollowUp', on_delete=models.SET_NULL, related_name='converted_quotations', null=True, blank=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True)
+    branch = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name='quotations', null=True, blank=True, db_index=True)
     customer_name = models.CharField(max_length=200)
     contact_number = models.CharField(max_length=30, null=True, blank=True)
     billing_address = models.TextField(null=True, blank=True)

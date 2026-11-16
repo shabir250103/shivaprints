@@ -237,6 +237,7 @@ def convert_pipeline_to_in_job(pipeline_job, user, **overrides):
     stock = overrides.get('stock_item')
     values = {
         'pipeline_job': pipeline_job,
+        'branch': pipeline_job.branch,
         'customer': selected_customer,
         'customer_name': pipeline_job.client_name,
         'contact_number': pipeline_job.contact_number,
@@ -294,6 +295,7 @@ def convert_pipeline_to_out_job(pipeline_job, user, **overrides):
     selected_customer = overrides.get('customer', pipeline_job.customer)
     values = {
         'pipeline_job': pipeline_job,
+        'branch': pipeline_job.branch,
         'customer': selected_customer,
         'customer_name': selected_customer.name if selected_customer else pipeline_job.client_name,
         'contact_number': pipeline_job.contact_number or None,
@@ -344,6 +346,7 @@ def handoff_completed_job_to_delivery(job, user):
     delivery, created = Delivery.objects.get_or_create(
         **lookup,
         defaults={
+            'branch': job.branch,
             'status': Delivery.Status.READY,
             'delivery_date': delivery_date,
             'contact_person': job.customer_name,
@@ -467,6 +470,7 @@ def record_customer_payment(job, amount, payment_type, payment_date, user, metho
     if not cash_account:
         cash_account = resolve_cash_account_for_method(method, allow_god_account=True)
     payment = CustomerPayment.objects.create(
+        branch=job.branch,
         in_job=job if isinstance(job, InJob) else None,
         out_job=job if isinstance(job, OutJob) else None,
         amount=amount, payment_type=payment_type, payment_date=payment_date,
@@ -501,7 +505,7 @@ def record_vendor_payment(out_job, amount, payment_date, user, method='', refere
     if not cash_account:
         cash_account = resolve_cash_account_for_method(method or 'petty', allow_god_account=False)
     payment = VendorPayment.objects.create(
-        out_job=out_job, amount=amount, payment_date=payment_date, method=method,
+        branch=out_job.branch, out_job=out_job, amount=amount, payment_date=payment_date, method=method,
         reference_no=reference_no, cash_account=cash_account, recorded_by=user,
     )
     out_job.vendor_advance += amount
@@ -615,6 +619,7 @@ def auto_generate_invoice(delivery, user, force=False):
     invoice_kwargs = {
         'in_job': in_job,
         'out_job': out_job,
+        'branch': getattr(job, 'branch', None),
         'invoice_date': timezone.localdate(),
         'subtotal': subtotal,
         'discount': Decimal('0'),

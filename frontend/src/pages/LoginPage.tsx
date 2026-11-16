@@ -35,8 +35,8 @@ export function LoginPage() {
     <Box className="login-shell">
       <Box className="login-visual">
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, position: 'relative', zIndex: 1 }}>
-          <Box className="brand-mark">LP</Box>
-          <Box><Typography fontFamily="DM Sans" fontSize={19} fontWeight={800}>Libin Prints</Typography><Typography fontSize={11} color="rgba(255,255,255,.55)" letterSpacing=".12em">WORKFLOW OS</Typography></Box>
+          <Box className="brand-mark">SP</Box>
+          <Box><Typography fontFamily="DM Sans" fontSize={19} fontWeight={800}>Shiva Prints</Typography><Typography fontSize={11} color="rgba(255,255,255,.55)" letterSpacing=".12em">WORKFLOW OS</Typography></Box>
         </Box>
         <Box sx={{ maxWidth: 640, position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, px: 1.5, py: .7, border: '1px solid rgba(255,255,255,.15)', borderRadius: 10, mb: 3 }}><AutoAwesomeRounded sx={{ fontSize: 16, color: '#ff986f' }} /><Typography fontSize={12} fontWeight={700}>One workspace. Every print job.</Typography></Box>

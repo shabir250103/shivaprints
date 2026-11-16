@@ -402,7 +402,7 @@ export const resources: Record<string, ResourceConfig> = {
     columns: [
       { key: 'username', label: 'Username' }, { key: 'first_name', label: 'First name' },
       { key: 'last_name', label: 'Last name' }, { key: 'email', label: 'Email' },
-      { key: 'role_name', label: 'Role' }, { key: 'department_name', label: 'Department' },
+      { key: 'role_name', label: 'Role' }, { key: 'department_name', label: 'Department' }, { key: 'branch_name', label: 'Branch' },
       { key: 'show_payment_details', label: 'Payment details', kind: 'boolean' },
       { key: 'is_active', label: 'Active', kind: 'boolean' },
     ],
@@ -411,6 +411,7 @@ export const resources: Record<string, ResourceConfig> = {
       { name: 'first_name', label: 'First name' }, { name: 'last_name', label: 'Last name' },
       { name: 'email', label: 'Email' }, { name: 'role', label: 'Role', type: 'lookup', lookupEndpoint: '/roles/?is_active=true', lookupLabel: 'name', required: true },
       { name: 'department', label: 'Department', type: 'lookup', lookupEndpoint: '/departments/?is_active=true', lookupLabel: 'name' },
+      { name: 'branch', label: 'Branch', type: 'lookup', lookupEndpoint: '/branches/?is_active=true', lookupLabel: 'name', required: true },
       { name: 'show_payment_details', label: 'Show payment details', type: 'boolean', defaultValue: true },
       { name: 'is_active', label: 'Account active', type: 'boolean', defaultValue: true },
       { name: 'profile_active', label: 'Profile active', type: 'boolean', defaultValue: true },
@@ -426,6 +427,20 @@ export const resources: Record<string, ResourceConfig> = {
     ],
     fields: [
       { name: 'name', label: 'Department name', required: true },
+      { name: 'is_active', label: 'Active', type: 'boolean', defaultValue: true },
+    ],
+  },
+  branches: {
+    title: 'Branches', singular: 'Branch', permission: 'users', endpoint: '/branches/',
+    description: 'Manage branch locations, contacts, managers, and active status.',
+    columns: [
+      { key: 'name', label: 'Branch name' }, { key: 'code', label: 'Code' }, { key: 'contact_number', label: 'Contact' },
+      { key: 'email', label: 'Email' }, { key: 'manager_name', label: 'Manager' }, { key: 'user_count', label: 'Users' }, { key: 'is_active', label: 'Active', kind: 'boolean' },
+    ],
+    fields: [
+      { name: 'name', label: 'Branch name', required: true }, { name: 'code', label: 'Branch code', required: true },
+      { name: 'address', label: 'Address', type: 'textarea' }, { name: 'contact_number', label: 'Contact number' },
+      { name: 'email', label: 'Email' }, { name: 'manager', label: 'Branch manager', type: 'lookup', lookupEndpoint: '/users/?is_active=true', lookupLabel: 'username' },
       { name: 'is_active', label: 'Active', type: 'boolean', defaultValue: true },
     ],
   },

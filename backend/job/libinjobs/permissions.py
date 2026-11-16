@@ -16,6 +16,7 @@ MODULE_BY_BASENAME = {
     'invoice': 'accounts', 'notification': 'notifications', 'followup': 'followups',
     'useraccount': 'users', 'role': 'users', 'userprofile': 'users',
     'department': 'users',
+    'branch': 'users',
     'modulepermissionoverride': 'permissions', 'dashboard': 'dashboard', 'report': 'reports',
     'companysettings': 'company_settings',
 }

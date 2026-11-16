@@ -9,6 +9,7 @@ from PIL import Image, UnidentifiedImageError
 _UNSET = object()
 
 from .models import (
+    Branch,
     Supplier, FinanceEntry, Quotation,
     CompanySettings,
     Customer,
@@ -59,7 +60,7 @@ class QuotationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Quotation
         fields = '__all__'
-        read_only_fields = ('created_by', 'created_at', 'updated_at')
+        read_only_fields = ('created_by', 'created_at', 'updated_at', 'branch')
 
     def get_totals(self, obj):
         return {key: format(value, '.2f') for key, value in obj.totals.items()}
@@ -100,6 +101,24 @@ class SupplierSerializer(serializers.ModelSerializer):
         model = Supplier
         fields = '__all__'
         read_only_fields = ('created_at', 'updated_at')
+
+
+class BranchSerializer(serializers.ModelSerializer):
+    manager_name = serializers.CharField(source='manager.get_full_name', read_only=True)
+    user_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Branch
+        fields = '__all__'
+        read_only_fields = ('created_at', 'updated_at', 'user_count')
+
+    def validate_manager(self, value):
+        if value and not value.is_active:
+            raise serializers.ValidationError('The branch manager must be active.')
+        return value
+
+    def get_user_count(self, obj):
+        return obj.users.count()
 
 
 class FinanceEntrySerializer(serializers.ModelSerializer):
@@ -422,7 +441,7 @@ class InJobSerializer(serializers.ModelSerializer):
     class Meta:
         model = InJob
         fields = '__all__'
-        read_only_fields = ('job_number', 'created_by', 'created_at', 'updated_at', 'balance', 'profit', 'current_count', 'click_count', 'accepted_by', 'accepted_at', 'work_started_at', 'delivery_status')
+        read_only_fields = ('job_number', 'created_by', 'created_at', 'updated_at', 'balance', 'profit', 'current_count', 'click_count', 'accepted_by', 'accepted_at', 'work_started_at', 'delivery_status', 'branch')
         extra_kwargs = {
             'customer_name': {'required': False, 'allow_blank': True},
             'job_type': {'required': False, 'allow_blank': True},
@@ -614,6 +633,7 @@ class OutJobSerializer(serializers.ModelSerializer):
         read_only_fields = (
             'job_number', 'created_by', 'created_at', 'updated_at',
             'balance', 'profit', 'vendor_balance', 'accepted_by', 'accepted_at', 'work_started_at', 'delivery_status',
+            'branch',
         )
 
     def validate(self, attrs):
@@ -848,7 +868,7 @@ class DeliverySerializer(serializers.ModelSerializer):
     class Meta:
         model = Delivery
         fields = '__all__'
-        read_only_fields = ('created_by', 'created_at', 'updated_at')
+        read_only_fields = ('created_by', 'created_at', 'updated_at', 'branch')
 
     def validate(self, attrs):
         in_job = attrs.get('in_job', getattr(self.instance, 'in_job', None))
@@ -883,6 +903,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockMovement
         fields = '__all__'
+        read_only_fields = ('branch',)
 
 
 class StockAdjustmentSerializer(serializers.Serializer):
@@ -908,7 +929,7 @@ class MachineCounterSerializer(serializers.ModelSerializer):
     class Meta:
         model = MachineCounter
         fields = '__all__'
-        read_only_fields = ('operator', 'created_at', 'updated_at', 'actual_clicks', 'job_clicks_booked', 'difference')
+        read_only_fields = ('operator', 'branch', 'created_at', 'updated_at', 'actual_clicks', 'job_clicks_booked', 'difference')
 
     def validate(self, attrs):
         morning = attrs.get('morning_count', getattr(self.instance, 'morning_count', 0))
@@ -941,7 +962,7 @@ class WastageRecordSerializer(serializers.ModelSerializer):
     class Meta:
         model = WastageRecord
         fields = '__all__'
-        read_only_fields = ('recorded_by', 'created_at', 'updated_at')
+        read_only_fields = ('recorded_by', 'branch', 'created_at', 'updated_at')
 
     def validate(self, attrs):
         in_job = attrs.get('in_job', getattr(self.instance, 'in_job', None))
@@ -1017,6 +1038,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         read_only_fields = (
             'created_by', 'created_at', 'updated_at', 'gst_amount', 'cgst_amount',
             'sgst_amount', 'taxable_amount', 'grand_total', 'is_igst_applicable', 'amount_in_words',
+            'branch',
         )
 
     def get_amount_in_words(self, obj):
@@ -1248,6 +1270,7 @@ class RoleSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     full_name = serializers.CharField(source='user.get_full_name', read_only=True)
+    branch = serializers.PrimaryKeyRelatedField(queryset=Branch.objects.filter(is_active=True), required=False, allow_null=True)
 
     def validate(self, attrs):
         request = self.context.get('request')
@@ -1261,11 +1284,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
             if role:
                 for module, allowed in role.default_permissions.items():
                     check_permission_grant(request.user, module, allowed)
+            branch = attrs.get('branch', self.instance.branch if self.instance else None)
+            actor_branch = getattr(getattr(request.user, 'libin_profile', None), 'branch_id', None)
+            if branch and not request.user.is_superuser and branch.pk != actor_branch:
+                raise serializers.ValidationError({'branch': 'You may only assign users within your own branch.'})
         return attrs
 
     class Meta:
         model = UserProfile
-        fields = ('id', 'user', 'username', 'full_name', 'role', 'department', 'is_active', 'show_payment_details', 'created_at', 'updated_at')
+        fields = ('id', 'user', 'username', 'full_name', 'role', 'department', 'branch', 'is_active', 'show_payment_details', 'created_at', 'updated_at')
         read_only_fields = ('created_at', 'updated_at')
 
 
@@ -1273,12 +1300,13 @@ class UserAccountSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
     role = serializers.PrimaryKeyRelatedField(queryset=Role.objects.filter(is_active=True), required=False, allow_null=True)
     department = serializers.PrimaryKeyRelatedField(queryset=Department.objects.filter(is_active=True), required=False, allow_null=True)
+    branch = serializers.PrimaryKeyRelatedField(queryset=Branch.objects.filter(is_active=True), required=False, allow_null=True)
     profile_active = serializers.BooleanField(required=False, default=True)
     show_payment_details = serializers.BooleanField(required=False, default=True)
 
     class Meta:
         model = get_user_model()
-        fields = ('id', 'username', 'first_name', 'last_name', 'email', 'is_active', 'password', 'role', 'department', 'profile_active', 'show_payment_details')
+        fields = ('id', 'username', 'first_name', 'last_name', 'email', 'is_active', 'password', 'role', 'department', 'branch', 'profile_active', 'show_payment_details')
 
     def validate(self, attrs):
         if self.instance is None and not attrs.get('password'):
@@ -1292,12 +1320,17 @@ class UserAccountSerializer(serializers.ModelSerializer):
             if role:
                 for module, allowed in role.default_permissions.items():
                     check_permission_grant(request.user, module, allowed)
+            branch = attrs.get('branch', profile.branch if profile else None)
+            actor_branch = getattr(getattr(request.user, 'libin_profile', None), 'branch_id', None)
+            if branch and not request.user.is_superuser and branch.pk != actor_branch:
+                raise serializers.ValidationError({'branch': 'You may only assign users within your own branch.'})
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         role = validated_data.pop('role', None)
         department = validated_data.pop('department', None)
+        branch = validated_data.pop('branch', None)
         profile_active = validated_data.pop('profile_active', True)
         show_payment_details = validated_data.pop('show_payment_details', True)
         password = validated_data.pop('password', None)
@@ -1310,6 +1343,7 @@ class UserAccountSerializer(serializers.ModelSerializer):
             user=user,
             role=role,
             department=department,
+            branch=branch,
             is_active=profile_active,
             show_payment_details=show_payment_details,
         )
@@ -1319,6 +1353,7 @@ class UserAccountSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         role = validated_data.pop('role', _UNSET)
         department = validated_data.pop('department', _UNSET)
+        branch = validated_data.pop('branch', _UNSET)
         profile_active = validated_data.pop('profile_active', _UNSET)
         show_payment_details = validated_data.pop('show_payment_details', _UNSET)
         password = validated_data.pop('password', None)
@@ -1336,6 +1371,8 @@ class UserAccountSerializer(serializers.ModelSerializer):
             profile.role = role
         if department is not _UNSET:
             profile.department = department
+        if branch is not _UNSET:
+            profile.branch = branch
         if profile_active is not _UNSET:
             profile.is_active = profile_active
         if show_payment_details is not _UNSET:
@@ -1351,6 +1388,8 @@ class UserAccountSerializer(serializers.ModelSerializer):
         data['role_name'] = profile.role.name if profile and profile.role else None
         data['department'] = profile.department_id if profile else None
         data['department_name'] = profile.department.name if profile and profile.department else None
+        data['branch'] = profile.branch_id if profile else None
+        data['branch_name'] = profile.branch.name if profile and profile.branch else None
         data['profile_active'] = profile.is_active if profile else instance.is_active
         data['show_payment_details'] = profile.show_payment_details if profile else True
         return data

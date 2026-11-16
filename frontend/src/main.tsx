@@ -7,6 +7,7 @@ import { App } from './App'
 import { AuthProvider } from './auth/AuthContext'
 import { theme } from './theme'
 import './styles.css'
+import { BrandingProvider } from './branding/BrandingContext'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,7 +21,7 @@ createRoot(document.getElementById('root')!).render(
       <CssBaseline />
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <AuthProvider><App /></AuthProvider>
+          <AuthProvider><BrandingProvider><App /></BrandingProvider></AuthProvider>
         </BrowserRouter>
       </QueryClientProvider>
     </ThemeProvider>

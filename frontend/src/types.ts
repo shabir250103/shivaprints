@@ -12,6 +12,8 @@ export interface AuthUser {
   role_name: string | null
   department: number | null
   department_name: string | null
+  branch?: number | null
+  branch_name?: string | null
 }
 
 export interface AuthPayload {

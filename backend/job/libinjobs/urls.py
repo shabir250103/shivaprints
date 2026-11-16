@@ -2,7 +2,7 @@ from rest_framework.routers import DefaultRouter
 from django.urls import path
 
 from .views import (
-    CompanySettingsViewSet, SupplierViewSet, FinanceEntryViewSet, QuotationViewSet,
+    BranchViewSet, CompanySettingsViewSet, SupplierViewSet, FinanceEntryViewSet, QuotationViewSet,
     CashAccountViewSet,
     CashTransactionViewSet,
     CashTransferViewSet,
@@ -42,6 +42,7 @@ from .views import (
 app_name = 'libinjobs'
 
 router = DefaultRouter()
+router.register('branches', BranchViewSet)
 router.register('quotations', QuotationViewSet)
 router.register('suppliers', SupplierViewSet)
 router.register('finance-entries', FinanceEntryViewSet)

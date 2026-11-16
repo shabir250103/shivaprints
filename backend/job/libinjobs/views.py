@@ -16,7 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import (
-    CompanySettings, Supplier, FinanceEntry, Quotation,
+    Branch, CompanySettings, Supplier, FinanceEntry, Quotation,
     CashAccount, CashTransaction, CashTransfer, Customer, CustomerPayment,
     CustomerType, Delivery, Department, FollowUp, InJob, InJobDropdownOption, Invoice, JobDocument, Machine,
     MachineCounter, MachineStatusHistory, ModulePermissionOverride, Notification,
@@ -24,7 +24,7 @@ from .models import (
     VendorPayment, WastageRecord,
 )
 from .serializers import (
-    CompanySettingsSerializer, SupplierSerializer, FinanceEntrySerializer, QuotationSerializer,
+    BranchSerializer, CompanySettingsSerializer, SupplierSerializer, FinanceEntrySerializer, QuotationSerializer,
     CustomerSerializer,
     CustomerPaymentCreateSerializer,
     CustomerPaymentSerializer,
@@ -67,6 +67,41 @@ from .serializers import (
 from .permissions import user_has_module_access
 
 
+def user_branch(user):
+    profile = getattr(user, 'libin_profile', None)
+    return getattr(profile, 'branch', None)
+
+
+def branch_for_request(request):
+    branch = user_branch(request.user)
+    if branch and not branch.is_active:
+        return None
+    return branch
+
+
+def save_with_branch(serializer, request, **kwargs):
+    """Force branch ownership for non-superusers; never trust a submitted branch id."""
+    if not request.user.is_superuser and hasattr(serializer.Meta.model, 'branch'):
+        branch = branch_for_request(request)
+        # Keep legacy unassigned accounts operational during migration. Once a
+        # user has a branch, ownership is always forced server-side.
+        if branch is not None:
+            kwargs['branch'] = branch
+    return serializer.save(**kwargs)
+
+
+def scope_branch_queryset(queryset, user):
+    """Apply server-side branch isolation to any model carrying branch ownership."""
+    if 'branch' not in {field.name for field in queryset.model._meta.get_fields()}:
+        return queryset
+    if user.is_superuser:
+        return queryset
+    branch = user_branch(user)
+    # Legacy users/records remain usable without being silently assigned to a branch;
+    # they can see only the still-unassigned legacy records.
+    return queryset.filter(branch=branch) if branch else queryset.filter(branch__isnull=True)
+
+
 def authentication_payload(user, token=None):
     profile = getattr(user, 'libin_profile', None)
     payload = {
@@ -82,6 +117,8 @@ def authentication_payload(user, token=None):
             'role_name': profile.role.name if profile and profile.role else None,
             'department': profile.department_id if profile else None,
             'department_name': profile.department.name if profile and profile.department else None,
+            'branch': profile.branch_id if profile else None,
+            'branch_name': profile.branch.name if profile and profile.branch else None,
         },
         'permissions': {
             module: user_has_module_access(user, module)
@@ -174,6 +211,15 @@ class SearchableModelViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        field_names = {field.name for field in queryset.model._meta.get_fields()}
+        if 'branch' in field_names:
+            if self.request.user.is_superuser:
+                requested_branch = self.request.query_params.get('branch')
+                if requested_branch:
+                    queryset = queryset.filter(branch_id=requested_branch)
+            else:
+                branch = user_branch(self.request.user)
+                queryset = queryset.filter(branch=branch) if branch else queryset.filter(branch__isnull=True)
         search = self.request.query_params.get('search', '').strip()
         if search and self.search_fields:
             query = Q()
@@ -183,6 +229,22 @@ class SearchableModelViewSet(viewsets.ModelViewSet):
 
         active = self.request.query_params.get('is_active')
         if active is not None and hasattr(queryset.model, 'is_active'):
+            queryset = queryset.filter(is_active=active.lower() in {'1', 'true', 'yes'})
+        return queryset
+
+
+class BranchViewSet(SearchableModelViewSet):
+    queryset = Branch.objects.select_related('manager').prefetch_related('users')
+    serializer_class = BranchSerializer
+    search_fields = ('name', 'code', 'address', 'contact_number', 'email')
+
+    def get_queryset(self):
+        queryset = Branch.objects.select_related('manager').prefetch_related('users')
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(Q(name__icontains=search) | Q(code__icontains=search) | Q(address__icontains=search) | Q(contact_number__icontains=search) | Q(email__icontains=search))
+        active = self.request.query_params.get('is_active')
+        if active is not None:
             queryset = queryset.filter(is_active=active.lower() in {'1', 'true', 'yes'})
         return queryset
 
@@ -204,7 +266,7 @@ class InJobDropdownOptionViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         return queryset.filter(field_name=field_name) if field_name else queryset
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
 
 class CustomerTypeViewSet(SearchableModelViewSet):
@@ -217,6 +279,9 @@ class CustomerViewSet(SearchableModelViewSet):
     queryset = Customer.objects.select_related('customer_type')
     serializer_class = CustomerSerializer
     search_fields = ('name', 'mobile', 'gst_number')
+
+    def perform_create(self, serializer):
+        save_with_branch(serializer, self.request)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -264,7 +329,7 @@ class StockCategoryViewSet(SearchableModelViewSet):
         return super().list(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
 
 class StockItemViewSet(SearchableModelViewSet):
@@ -330,7 +395,7 @@ class PipelineJobViewSet(SearchableModelViewSet):
         })
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
     @action(detail=True, methods=('get',), url_path='reference-image')
     def reference_image(self, request, pk=None):
@@ -519,7 +584,7 @@ class InJobViewSet(JobClaimMixin, SearchableModelViewSet):
         return Response(list(get_user_model().objects.filter(is_active=True).values('id', 'username', 'first_name', 'last_name')))
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
     @action(detail=True, methods=('post',), url_path='cancel')
     def cancel(self, request, pk=None):
@@ -597,7 +662,7 @@ class OutJobViewSet(JobClaimMixin, SearchableModelViewSet):
         return Response(list(get_user_model().objects.filter(is_active=True).values('id', 'username', 'first_name', 'last_name')))
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
     @action(detail=True, methods=('post',), url_path='cancel')
     def cancel(self, request, pk=None):
@@ -659,7 +724,7 @@ class DeliveryViewSet(SearchableModelViewSet):
     search_fields = ('in_job__job_number', 'out_job__job_number', 'contact_person', 'contact_number', 'transport_company')
 
     def perform_create(self, serializer):
-        delivery = serializer.save(created_by=self.request.user)
+        delivery = save_with_branch(serializer, self.request, created_by=self.request.user)
         if delivery.status == Delivery.Status.DELIVERED:
             try:
                 auto_generate_invoice(delivery, self.request.user)
@@ -707,7 +772,7 @@ class MachineCounterViewSet(SearchableModelViewSet):
     search_fields = ('machine__code', 'machine__name', 'operator__username')
 
     def perform_create(self, serializer):
-        serializer.save(operator=self.request.user)
+        save_with_branch(serializer, self.request, operator=self.request.user)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -773,7 +838,7 @@ class WastageRecordViewSet(SearchableModelViewSet):
     search_fields = ('reason', 'in_job__job_number', 'out_job__job_number', 'machine__name')
 
     def perform_create(self, serializer):
-        serializer.save(recorded_by=self.request.user)
+        save_with_branch(serializer, self.request, recorded_by=self.request.user)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -793,7 +858,7 @@ class InvoiceViewSet(SearchableModelViewSet):
     )
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -941,6 +1006,16 @@ class CompanySettingsViewSet(
         """Alias for list — returns current company settings."""
         return self.list(request)
 
+    @action(detail=False, methods=('get',), permission_classes=(AllowAny,), url_path='public-branding')
+    def public_branding(self, request):
+        instance = CompanySettings.get_instance()
+        if instance is None:
+            return Response({'company_name': 'Shiva Prints', 'company_logo_url': ''})
+        logo = ''
+        if instance.company_logo:
+            logo = request.build_absolute_uri(instance.company_logo.url)
+        return Response({'company_name': instance.company_name or 'Shiva Prints', 'company_logo_url': logo})
+
     def create(self, request, *args, **kwargs):
         """Create company settings (only allowed if none exist yet)."""
         existing = CompanySettings.get_instance()
@@ -980,6 +1055,7 @@ class CustomerPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mix
 
     def get_queryset(self):
         queryset = super().get_queryset().select_related('in_job__invoice', 'out_job__invoice')
+        queryset = scope_branch_queryset(queryset, self.request.user)
         job_id = self.request.query_params.get('job')
         if job_id:
             queryset = queryset.filter(Q(in_job_id=job_id) | Q(out_job_id=job_id))
@@ -994,7 +1070,7 @@ class CustomerPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mix
                 'balance': job.balance,
             }
             for kind, queryset in (
-                ('in', InJob.objects.all()), ('out', OutJob.objects.all())
+                ('in', scope_branch_queryset(InJob.objects.all(), request.user)), ('out', scope_branch_queryset(OutJob.objects.all(), request.user))
             )
             for job in queryset
         ]
@@ -1011,7 +1087,7 @@ class CustomerPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mix
         job_id = data.pop('job_id')
         model = InJob if job_type == 'in' else OutJob
         try:
-            job = model.objects.get(pk=job_id)
+            job = scope_branch_queryset(model.objects.all(), request.user).get(pk=job_id)
             payment = record_customer_payment(job=job, user=request.user, **data)
         except model.DoesNotExist:
             return Response({'job_id': 'Job not found.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1029,6 +1105,7 @@ class VendorPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixin
 
     def get_queryset(self):
         queryset = super().get_queryset().select_related('out_job__supplier')
+        queryset = scope_branch_queryset(queryset, self.request.user)
         job_id = self.request.query_params.get('job')
         return queryset.filter(out_job_id=job_id) if job_id else queryset
 
@@ -1041,7 +1118,7 @@ class VendorPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixin
                     'customer_name': job.customer_name, 'vendor': job.vendor,
                     'job_type': job.job_type, 'balance': job.vendor_balance,
                 }
-                for job in OutJob.objects.all()
+                for job in scope_branch_queryset(OutJob.objects.all(), request.user)
             ],
             'cash_accounts': list(CashAccount.objects.filter(is_active=True).values('id', 'name')),
         })
@@ -1049,6 +1126,8 @@ class VendorPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixin
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if not request.user.is_superuser and serializer.validated_data['out_job'].branch_id != getattr(user_branch(request.user), 'id', None):
+            return Response({'out_job': 'You cannot record a payment for another branch.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             payment = record_vendor_payment(user=request.user, **serializer.validated_data)
         except DjangoValidationError as exc:
@@ -1141,7 +1220,7 @@ class FollowUpViewSet(SearchableModelViewSet):
     search_fields = ('customer_name', 'job_type', 'printing_method', 'remarks')
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -1156,7 +1235,7 @@ class QuotationViewSet(SearchableModelViewSet):
     http_method_names = ('get', 'post', 'patch', 'put', 'head', 'options')
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        save_with_branch(serializer, self.request, created_by=self.request.user)
 
     @action(detail=False)
     def customers(self, request):
@@ -1441,8 +1520,8 @@ class DashboardViewSet(viewsets.ViewSet):
 
     def list(self, request):
         today = timezone.localdate()
-        in_jobs = InJob.objects.all()
-        out_jobs = OutJob.objects.all()
+        in_jobs = scope_branch_queryset(InJob.objects.all(), request.user)
+        out_jobs = scope_branch_queryset(OutJob.objects.all(), request.user)
 
         # Low stock details
         low_stock_qs = StockItem.objects.filter(current_stock__lte=F('min_stock'), is_active=True).order_by('current_stock')
@@ -1671,7 +1750,7 @@ class DashboardViewSet(viewsets.ViewSet):
             'pipeline': pipeline_count,
             'printing': printing_count,
             'completed': completed_count,
-            'delivered': Delivery.objects.filter(status=Delivery.Status.DELIVERED).count(),
+            'delivered': scope_branch_queryset(Delivery.objects.filter(status=Delivery.Status.DELIVERED), request.user).count(),
             'pending_payments': in_jobs.exclude(payment_status='paid').count() + out_jobs.exclude(payment_status='paid').count(),
             'low_stock_items': low_stock_count,
             'low_stock_list': low_stock_list,
@@ -1699,24 +1778,27 @@ class ReportViewSet(viewsets.ViewSet):
         end = request.query_params.get('to')
         return start, end
 
+    def _scope(self, queryset, request):
+        return scope_branch_queryset(queryset, request.user)
+
     @action(detail=False, methods=('get',))
     def daily(self, request):
         day = request.query_params.get('date', str(timezone.localdate()))
-        in_qs, out_qs = InJob.objects.filter(job_date=day), OutJob.objects.filter(created_at__date=day)
+        in_qs, out_qs = self._scope(InJob.objects.filter(job_date=day), request), self._scope(OutJob.objects.filter(created_at__date=day), request)
         return Response({'date': day, 'in_jobs': in_qs.count(), 'out_jobs': out_qs.count(), 'revenue': (in_qs.aggregate(v=Sum('total_amount'))['v'] or 0) + (out_qs.aggregate(v=Sum('total_amount'))['v'] or 0)})
 
     @action(detail=False, methods=('get',))
     def monthly(self, request):
         month = request.query_params.get('month', timezone.localdate().strftime('%Y-%m'))
         year, month_number = map(int, month.split('-'))
-        in_qs = InJob.objects.filter(job_date__year=year, job_date__month=month_number)
-        out_qs = OutJob.objects.filter(created_at__year=year, created_at__month=month_number)
+        in_qs = self._scope(InJob.objects.filter(job_date__year=year, job_date__month=month_number), request)
+        out_qs = self._scope(OutJob.objects.filter(created_at__year=year, created_at__month=month_number), request)
         return Response({'month': month, 'jobs': in_qs.count() + out_qs.count(), 'revenue': (in_qs.aggregate(v=Sum('total_amount'))['v'] or 0) + (out_qs.aggregate(v=Sum('total_amount'))['v'] or 0)})
 
     @action(detail=False, methods=('get',))
     def production(self, request):
         start, end = self._range(request)
-        queryset = InJob.objects.all()
+        queryset = self._scope(InJob.objects.all(), request)
         if start: queryset = queryset.filter(job_date__gte=start)
         if end: queryset = queryset.filter(job_date__lte=end)
         return Response({'jobs': queryset.count(), 'sheets': queryset.aggregate(v=Sum('sheet_count'))['v'] or 0, 'clicks': queryset.aggregate(v=Sum('click_count'))['v'] or 0, 'value': queryset.aggregate(v=Sum('total_amount'))['v'] or 0})
@@ -1729,7 +1811,7 @@ class ReportViewSet(viewsets.ViewSet):
     @action(detail=False, methods=('get',), url_path='machine-usage')
     def machine_usage(self, request):
         start, end = self._range(request)
-        queryset = MachineCounter.objects.select_related('machine', 'operator')
+        queryset = self._scope(MachineCounter.objects.select_related('machine', 'operator'), request)
         if start: queryset = queryset.filter(count_date__gte=start)
         if end: queryset = queryset.filter(count_date__lte=end)
         return Response(MachineCounterSerializer(queryset, many=True).data)
@@ -1783,13 +1865,13 @@ class ReportViewSet(viewsets.ViewSet):
         profile = getattr(request.user, 'userprofile', None)
         can_show_payments = request.user.is_superuser or (profile and profile.show_payment_details)
 
-        in_qs = InJob.objects.select_related('customer', 'machine', 'accepted_by').all()
-        out_qs = OutJob.objects.select_related('customer', 'supplier', 'accepted_by').all()
-        cust_pay_qs = CustomerPayment.objects.select_related('in_job', 'out_job').all()
-        vend_pay_qs = VendorPayment.objects.select_related('out_job').all()
-        deliv_qs = Delivery.objects.select_related('in_job', 'out_job').all()
-        wastage_qs = WastageRecord.objects.select_related('in_job', 'out_job', 'machine').all()
-        counters_qs = MachineCounter.objects.select_related('machine', 'operator').all()
+        in_qs = self._scope(InJob.objects.select_related('customer', 'machine', 'accepted_by').all(), request)
+        out_qs = self._scope(OutJob.objects.select_related('customer', 'supplier', 'accepted_by').all(), request)
+        cust_pay_qs = self._scope(CustomerPayment.objects.select_related('in_job', 'out_job').all(), request)
+        vend_pay_qs = self._scope(VendorPayment.objects.select_related('out_job').all(), request)
+        deliv_qs = self._scope(Delivery.objects.select_related('in_job', 'out_job').all(), request)
+        wastage_qs = self._scope(WastageRecord.objects.select_related('in_job', 'out_job', 'machine').all(), request)
+        counters_qs = self._scope(MachineCounter.objects.select_related('machine', 'operator').all(), request)
 
         if not request.user.is_superuser:
             in_qs = in_qs.filter(Q(accepted_by=request.user) | Q(accepted_by__isnull=True))
