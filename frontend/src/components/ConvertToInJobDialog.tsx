@@ -21,8 +21,8 @@ type Options = {
   custom_options: Record<string, Array<{ id: number; label: string; base_value: string }>>
   pipeline_jobs?: Array<{ id: number; job_number: string; client_name: string; contact_number: string; job_date: string; job_type: string; quantity: number; priority: string; customer: number | null }>
 }
-type DailyMachineCounter = { machine_id: number; morning_count: number | null; job_clicks_booked: number }
 type Form = Record<string, string | boolean | number[]>
+type DailyMachineSummary = { morning_count: number | null; total_clicks_today: number; current_machine_count: number | null }
 
 // Format: designer+customername+boardtype gsm,+ss/ds+matt lami+1+3 (or _ delimited)
 export function parseInJobName(jobName: string): Record<string, string> | null {
@@ -187,7 +187,7 @@ const PARSED_FIELD_LABELS: Record<string, string> = {
   sheet_count: 'Sheets', quantity: 'Quantity', stock_item: 'Stock', remarks: 'Remarks',
 }
 const numericFields = new Set(['gsm', 'quantity', 'sheet_count', 'wastage_count', 'total_amount', 'advance', 'expenses', 'gst_percent'])
-const idFields = new Set(['pipeline_job', 'customer', 'stock_item', 'printer', 'designer', 'machine', 'everyone_in_department', 'priority_option', 'side_option', 'payment_option'])
+const idFields = new Set(['pipeline_job', 'customer', 'stock_item', 'printer', 'designer', 'printing_operator', 'wastage_operator', 'everyone_in_department', 'side_option', 'payment_option'])
 const addNewValue = '__add_new__'
 
 function initialForm(row?: ApiRecord): Form {
@@ -198,8 +198,6 @@ function initialForm(row?: ApiRecord): Form {
     customer: String(row?.customer || ''),
     customer_name: String(row?.customer_name || row?.client_name || ''),
     contact_number: String(row?.contact_number || ''),
-    priority: String(row?.priority || 'normal'),
-    priority_option: String(row?.priority_option || ''),
     reference_type: String(row?.reference_type || 'regular'),
     job_date: String(row?.job_date || new Date().toLocaleDateString('sv-SE')),
     job_type: String(row?.job_type || ''),
@@ -216,9 +214,12 @@ function initialForm(row?: ApiRecord): Form {
     side_option: String(row?.side_option || ''),
     sheet_count: String(row?.sheet_count ?? '0'),
     wastage_count: String(row?.wastage_count ?? '0'),
+    wastage_operator: String(row?.wastage_operator || ''),
     printer: String(row?.printer || ''),
     designer: String(row?.designer || row?.assigned_designer || ''),
-    machine: String(row?.machine || ''),
+    printing_operator: String(row?.printing_operator || ''),
+    printing_status: String(row?.printing_status || 'pending'),
+    finishing_status: String(row?.finishing_status || 'pending'),
     lamination_type: String(row?.lamination_type || 'None'),
     regular_finish: row?.regular_finish != null ? Boolean(row.regular_finish) : true,
     corner_finish: Boolean(row?.corner_finish),
@@ -257,10 +258,10 @@ export function ConvertToInJobDialog({ row, pending, error, page = false, standa
     queryKey: ['in-job-form-options', isPipelineConversion ? row?.id : 'create'],
     queryFn: async () => (await api.get<Options>(isPipelineConversion ? `/pipeline-jobs/${row?.id}/in-job-options/` : '/in-jobs/create-options/')).data,
   })
-  const dailyCounter = useQuery({
-    queryKey: ['machine-daily', form.job_date],
-    enabled: can('machine') && Boolean(form.machine) && Boolean(form.job_date),
-    queryFn: async () => (await api.get<{ machines: DailyMachineCounter[] }>('/machine-counters/daily/', { params: { date: form.job_date } })).data,
+  const dailyClicks = useQuery({
+    queryKey: ['in-job-click-summary', form.job_date],
+    enabled: Boolean(form.job_date),
+    queryFn: async () => (await api.get<{ machines: DailyMachineSummary[] }>('/machine-counters/daily/', { params: { date: form.job_date } })).data,
   })
   useEffect(() => {
     const refreshChoices = () => { void options.refetch() }
@@ -269,15 +270,13 @@ export function ConvertToInJobDialog({ row, pending, error, page = false, standa
   }, [options.refetch])
   useEffect(() => { setForm(initialForm(row)); touched.current.clear() }, [row?.id])
   useEffect(() => {
-    const preferred = options.data?.machines.find((machine) => machine.is_default)
-    if (preferred && !row?.machine && !touched.current.has('machine')) setForm((current) => ({ ...current, machine: String(preferred.id) }))
     const selected = options.data?.customers.find((customer) => String(customer.id) === String(row?.customer || ''))
     if (selected) setForm((current) => ({
       ...current,
       ...(!touched.current.has('customer_name') && !current.job_name && !row?.customer_name ? { customer_name: selected.name } : {}),
       ...(!touched.current.has('contact_number') && !row?.contact_number ? { contact_number: selected.mobile } : {}),
     }))
-  }, [options.data, row?.customer, row?.machine, row?.customer_name, row?.contact_number])
+  }, [options.data, row?.customer, row?.customer_name, row?.contact_number])
 
   const update = (field: string, value: string | boolean | number[]) => {
     touched.current.add(field)
@@ -315,13 +314,20 @@ export function ConvertToInJobDialog({ row, pending, error, page = false, standa
     [...new Set([...defaults, ...saved, current].filter(Boolean))].map((value) => ({ value, label: value }))
   const checkbox = (name: string, label: string) => <FormControlLabel key={name} control={<Checkbox checked={Boolean(form[name])} onChange={(event) => update(name, event.target.checked)} />} label={label} />
   const calculatedClicks = Number(form.sheet_count || 0) * (String(form.side_mode).toUpperCase() === 'DS' ? 2 : 1)
-  const selectedMachineCounter = dailyCounter.data?.machines.find((counter) => String(counter.machine_id) === String(form.machine))
-  const morningCount = selectedMachineCounter?.morning_count
-  const overallClicks = (selectedMachineCounter?.job_clicks_booked || 0) + calculatedClicks
-  const currentCount = morningCount == null ? null : morningCount + overallClicks
   const balance = Number(form.total_amount || 0) - Number(form.advance || 0)
   const profit = Number(form.total_amount || 0) - Number(form.expenses || 0)
   const parsedName = useMemo(() => !form.job_name || Boolean(parseInJobName(String(form.job_name).trim())), [form.job_name])
+  const savedClickSummary = useMemo(() => (dailyClicks.data?.machines || []).reduce((summary, machine) => ({
+    previous: summary.previous + Number(machine.morning_count || 0),
+    current: summary.current + Number(machine.total_clicks_today || 0),
+    total: summary.total + Number(machine.current_machine_count || 0),
+  }), { previous: 0, current: 0, total: 0 }), [dailyClicks.data])
+  const clickSummary = {
+    previous: Math.max(0, Math.max(savedClickSummary.total, savedClickSummary.current) - Number(row?.click_count || 0)),
+    current: calculatedClicks,
+    total: Math.max(0, Math.max(savedClickSummary.total, savedClickSummary.current) - Number(row?.click_count || 0)) + calculatedClicks,
+  }
+  const clickNumber = (value: number) => value.toLocaleString('en-IN')
 
   const updateJobName = (value: string) => {
     touched.current.add('job_name')
@@ -500,12 +506,18 @@ export function ConvertToInJobDialog({ row, pending, error, page = false, standa
       {options.isError && <Alert severity="error" sx={{ mb: 2 }}>{apiError(options.error)}</Alert>}
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {options.isLoading ? <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box> : <>
-        <Alert severity="info" sx={{ mb: 1 }} action={<Button size="small" onClick={() => void options.refetch()}>Refresh choices</Button>}>Choose “Add new…” to create and select a choice here without leaving this job.</Alert>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1, mb: 1 }}>
-          <TextField label="Morning Count" value={morningCount == null ? '—' : morningCount.toLocaleString('en-IN')} size="small" fullWidth slotProps={{ input: { readOnly: true } }} helperText="From the selected machine's daily counter" />
-          <TextField label="Click Count" value={overallClicks.toLocaleString('en-IN')} size="small" fullWidth slotProps={{ input: { readOnly: true } }} helperText="Total booked to this machine/date, including this job" />
-          <TextField label="Current Count" value={currentCount == null ? '—' : currentCount.toLocaleString('en-IN')} size="small" fullWidth sx={{ gridColumn: { xs: '1 / -1', sm: 'auto' } }} slotProps={{ input: { readOnly: true } }} helperText={dailyCounter.isError ? 'Machine counter details are unavailable for your role.' : 'Opening count + booked clicks + this job'} />
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 1.5, mb: 2 }}>
+          {[
+            ['Previous Clicks', clickSummary.previous, 'Overall machine count before this job'],
+            ['Current Clicks', clickSummary.current, 'This job · SS/DS calculated'],
+            ['Total Clicks', clickSummary.total, 'Previous + current job clicks'],
+          ].map(([label, value, helper]) => <Card key={String(label)} variant="outlined" sx={{ p: 1.5, bgcolor: '#f8fafc' }}>
+            <Typography color="text.secondary" fontSize={12} fontWeight={700}>{label}</Typography>
+            <Typography variant="h5" fontWeight={800}>{dailyClicks.isLoading ? '…' : clickNumber(Number(value))}</Typography>
+            <Typography color="text.secondary" fontSize={11}>{helper}</Typography>
+          </Card>)}
         </Box>
+        <Alert severity="info" sx={{ mb: 1 }} action={<Button size="small" onClick={() => void options.refetch()}>Refresh choices</Button>}>Choose “Add new…” to create and select a choice here without leaving this job.</Alert>
         <Section title="Basic Information">
           <Box sx={{ gridColumn: { md: 'span 2' } }}>
             <TextField
@@ -551,7 +563,6 @@ export function ConvertToInJobDialog({ row, pending, error, page = false, standa
             )}
           </Box>
           <TextField select label="Existing Customer" value={form.customer} onChange={(event) => event.target.value === addNewValue ? setQuickAddTarget('customer') : chooseCustomer(event.target.value)} size="small" fullWidth><MenuItem value="">Select to auto-fill</MenuItem>{options.data?.customers.map((customer) => <MenuItem key={customer.id} value={String(customer.id)}>{customer.name}</MenuItem>)}{can('customers') && <MenuItem value={addNewValue} sx={{ fontWeight: 700, color: 'primary.main' }}>＋ Add new customer…</MenuItem>}</TextField>
-          {fixedSelect('priority', 'priority_option', 'Priority', ['low', 'normal', 'high', 'urgent'].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) })))}
           {select('reference_type', 'Job Reference', [
             { value: 'regular', label: 'Regular (R)' },
             { value: 'corporate', label: 'Corporate (C)' },
@@ -580,14 +591,17 @@ export function ConvertToInJobDialog({ row, pending, error, page = false, standa
           {field('paper_type', 'Paper Type')}{number('gsm', 'GSM')}{field('paper_size', 'Paper Size')}{number('quantity', 'Quantity')}
           {fixedSelect('side_mode', 'side_option', 'Side', [{ value: 'SS', label: 'SS' }, { value: 'DS', label: 'DS' }])}
           {number('sheet_count', 'Sheet Count')}
-          <TextField label="In Job Click Count (read-only; DS counts 2 per sheet)" value={calculatedClicks} size="small" fullWidth slotProps={{ input: { readOnly: true } }} helperText="Updates automatically from sheet count and Side. This click count is also included in the selected machine's daily counter." />
-          {number('wastage_count', 'Wastage Count')}
+           <TextField label="In Job Click Count (read-only; DS counts 2 per sheet)" value={calculatedClicks} size="small" fullWidth slotProps={{ input: { readOnly: true } }} helperText="Updates automatically from sheet count and Side." />
+           {number('wastage_count', 'Wastage Count')}
+           {Number(form.wastage_count || 0) > 0 && select('wastage_operator', 'Wastage done by', [{ value: '', label: 'Select employee' }, ...(options.data?.users || []).map((user) => ({ value: String(user.id), label: userLabel(user) }))])}
           {field('colour_spec', 'Colour')}
           {select('printer', 'Printer', lookup(options.data?.machines), can('machine') ? 'printer' : undefined)}
           {select('designer', 'Designer', [{ value: '', label: 'Unassigned' }, ...(options.data?.users || []).map((user) => ({ value: String(user.id), label: userLabel(user) }))], can('users') ? 'designer' : undefined)}
-          {select('machine', 'Machine', lookup(options.data?.machines), can('machine') ? 'machine' : undefined)}
+           {select('printing_operator', 'Printing operator', [{ value: '', label: 'Unassigned' }, ...(options.data?.users || []).map((user) => ({ value: String(user.id), label: userLabel(user) }))])}
+           {select('printing_status', 'Printing status', [{ value: 'pending', label: 'Pending' }, { value: 'in_progress', label: 'In progress' }, { value: 'completed', label: 'Completed' }])}
         </Section>
         <Section title="Finishing Details">
+           {select('finishing_status', 'Finishing status', [{ value: 'pending', label: 'Pending' }, { value: 'in_progress', label: 'In progress' }, { value: 'completed', label: 'Completed' }])}
           {select('lamination_type', 'Lamination', textChoices(String(form.lamination_type || ''), ['None', 'Matt', 'Gloss', 'Soft Touch'], options.data?.lamination_types), 'lamination_type')}
           {select('binding_method', 'Binding', textChoices(String(form.binding_method || ''), ['None'], options.data?.binding_methods), 'binding_method')}
           <Box>{checkbox('regular_finish', 'Regular Cutting')}{checkbox('corner_finish', 'Corner Cutting')}</Box>

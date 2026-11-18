@@ -521,6 +521,98 @@ def record_vendor_payment(out_job, amount, payment_date, user, method='', refere
 
 
 @transaction.atomic
+def edit_customer_payment(payment, amount, payment_type, payment_date, method, reference_no, cash_account, user):
+    """Edit a posted customer receipt while keeping the job and cash ledger balanced."""
+    payment = CustomerPayment.objects.select_for_update().select_related('in_job', 'out_job', 'cash_account').get(pk=payment.pk)
+    job = (InJob if payment.in_job_id else OutJob).objects.select_for_update().get(pk=payment.in_job_id or payment.out_job_id)
+    amount = Decimal(amount)
+    if amount <= 0:
+        raise ValidationError({'amount': 'Amount must be greater than zero.'})
+    if job.advance - payment.amount + amount > job.total_amount:
+        raise ValidationError({'amount': 'Payment exceeds the outstanding customer balance.'})
+    cash_account = cash_account or resolve_cash_account_for_method(method, allow_god_account=True)
+    old_tx = getattr(payment, 'cash_transaction', None)
+    if old_tx:
+        old_account = CashAccount.objects.select_for_update().get(pk=old_tx.account_id)
+        old_account.balance += -old_tx.amount if old_tx.transaction_type == CashTransaction.TransactionType.CREDIT else old_tx.amount
+        old_account.save(update_fields=('balance', 'updated_at'))
+    new_account = CashAccount.objects.select_for_update().get(pk=cash_account.pk) if cash_account else None
+    if new_account:
+        new_balance = new_account.balance + amount
+        new_account.balance = new_balance
+        new_account.save(update_fields=('balance', 'updated_at'))
+    else:
+        new_balance = None
+    job.advance = job.advance - payment.amount + amount
+    job.payment_status = PaymentStatus.PAID if job.advance == job.total_amount else PaymentStatus.PARTIAL
+    job.save(update_fields=('advance', 'payment_status', 'updated_at'))
+    payment.amount = amount
+    payment.payment_type = payment_type
+    payment.payment_date = payment_date
+    payment.method = method
+    payment.reference_no = reference_no
+    payment.cash_account = cash_account
+    payment.save(update_fields=('amount', 'payment_type', 'payment_date', 'method', 'reference_no', 'cash_account', 'updated_at'))
+    if old_tx:
+        old_tx.account = new_account
+        old_tx.amount = amount
+        old_tx.balance_after = new_balance or 0
+        old_tx.transaction_date = payment_date
+        old_tx.description = f'Customer payment for {job.job_number}'
+        old_tx.save(update_fields=('account', 'amount', 'balance_after', 'transaction_date', 'description', 'updated_at'))
+    elif new_account:
+        _post_cash(new_account, CashTransaction.TransactionType.CREDIT, amount, f'Customer payment for {job.job_number}', user, payment_date, customer_payment=payment)
+    handoff_completed_job_to_delivery(job, user)
+    return payment
+
+
+@transaction.atomic
+def edit_vendor_payment(payment, amount, payment_date, method, reference_no, cash_account, user):
+    """Edit a posted vendor payout while preserving the cash account balance."""
+    payment = VendorPayment.objects.select_for_update().select_related('out_job', 'cash_account').get(pk=payment.pk)
+    job = OutJob.objects.select_for_update().get(pk=payment.out_job_id)
+    amount = Decimal(amount)
+    if amount <= 0:
+        raise ValidationError({'amount': 'Amount must be greater than zero.'})
+    if job.vendor_advance - payment.amount + amount > job.vendor_total_payment:
+        raise ValidationError({'amount': 'Payment exceeds the outstanding vendor balance.'})
+    cash_account = cash_account or resolve_cash_account_for_method(method or 'petty', allow_god_account=False)
+    old_tx = getattr(payment, 'cash_transaction', None)
+    if old_tx:
+        old_account = CashAccount.objects.select_for_update().get(pk=old_tx.account_id)
+        old_account.balance += old_tx.amount
+        old_account.save(update_fields=('balance', 'updated_at'))
+    new_account = CashAccount.objects.select_for_update().get(pk=cash_account.pk) if cash_account else None
+    if new_account:
+        new_balance = new_account.balance - amount
+        if new_balance < 0:
+            raise ValidationError({'cash_account': 'Insufficient cash balance.'})
+        new_account.balance = new_balance
+        new_account.save(update_fields=('balance', 'updated_at'))
+    else:
+        new_balance = None
+    job.vendor_advance = job.vendor_advance - payment.amount + amount
+    job.vendor_payment_status = PaymentStatus.PAID if job.vendor_advance == job.vendor_total_payment else PaymentStatus.PARTIAL
+    job.save(update_fields=('vendor_advance', 'vendor_payment_status', 'updated_at'))
+    payment.amount = amount
+    payment.payment_date = payment_date
+    payment.method = method
+    payment.reference_no = reference_no
+    payment.cash_account = cash_account
+    payment.save(update_fields=('amount', 'payment_date', 'method', 'reference_no', 'cash_account', 'updated_at'))
+    if old_tx:
+        old_tx.account = new_account
+        old_tx.amount = amount
+        old_tx.balance_after = new_balance or 0
+        old_tx.transaction_date = payment_date
+        old_tx.description = f'Vendor payment for {job.job_number}'
+        old_tx.save(update_fields=('account', 'amount', 'balance_after', 'transaction_date', 'description', 'updated_at'))
+    elif new_account:
+        _post_cash(new_account, CashTransaction.TransactionType.DEBIT, amount, f'Vendor payment for {job.job_number}', user, payment_date, vendor_payment=payment)
+    return payment
+
+
+@transaction.atomic
 def transfer_cash(source, destination, amount, transfer_date, reason, user):
     amount = Decimal(amount)
     if source.pk == destination.pk:

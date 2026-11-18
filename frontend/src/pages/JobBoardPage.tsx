@@ -147,7 +147,7 @@ export function JobBoardPage() {
         </Box>
         {tab === 0 ?
           <Button variant="contained" disabled={action.isPending} onClick={() => action.mutate({ job, verb: 'accept' })}>Accept job</Button> :
-          !job.work_started_at && (job.printing_status === 'pending' || job.status === 'pending' || job.status === 'sent') ?
+          job.kind === 'in-jobs' && !job.work_started_at && (job.printing_status === 'pending' || job.status === 'pending' || job.status === 'sent') ?
             <Button variant="contained" disabled={action.isPending} onClick={() => action.mutate({ job, verb: 'start' })}>Start work</Button> :
             <Chip label={job.work_started_at ? 'Started' : 'Not startable'} color={job.work_started_at ? 'success' : 'default'} />}
       </CardContent>{tab === 1 ? <Accordion disableGutters elevation={0} sx={{ borderTop: '1px solid', borderColor: 'divider' }}>

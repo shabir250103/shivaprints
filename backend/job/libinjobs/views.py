@@ -200,7 +200,8 @@ class CurrentUserAPIView(APIView):
         return Response(authentication_payload(request.user))
 from .services import (
     adjust_stock, auto_generate_invoice, change_machine_status, convert_pipeline_to_in_job,
-    convert_pipeline_to_out_job, record_customer_payment, record_vendor_payment,
+    convert_pipeline_to_out_job, edit_customer_payment, edit_vendor_payment,
+    record_customer_payment, record_vendor_payment,
     handoff_completed_job_to_delivery,
     transfer_cash,
 )
@@ -531,7 +532,7 @@ class InJobViewSet(JobClaimMixin, SearchableModelViewSet):
     offer_statuses = (InJob.ProductionStatus.PENDING,)
     status_field = 'printing_status'
     offer_serializer_class = InJobOfferSerializer
-    queryset = InJob.objects.select_related('pipeline_job', 'customer', 'stock_item', 'printer', 'designer', 'machine', 'created_by', 'accepted_by', 'delivery', 'priority_option', 'side_option', 'payment_option').prefetch_related('assigned_users', 'assigned_departments', 'payments')
+    queryset = InJob.objects.select_related('pipeline_job', 'customer', 'stock_item', 'printer', 'designer', 'printing_operator', 'wastage_operator', 'machine', 'created_by', 'accepted_by', 'delivery', 'priority_option', 'side_option', 'payment_option').prefetch_related('assigned_users', 'assigned_departments', 'payments')
     serializer_class = InJobSerializer
     search_fields = ('job_number', 'customer_name', 'contact_number', 'job_type', 'file_name', 'invoice_no', 'designer__username', 'machine__name')
 
@@ -599,6 +600,7 @@ class InJobViewSet(JobClaimMixin, SearchableModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        queryset = queryset.exclude(delivery__status__in=(Delivery.Status.READY, Delivery.Status.DISPATCHED, Delivery.Status.DELIVERED))
         for parameter in ('priority', 'printing_status', 'finishing_status', 'payment_status'):
             value = self.request.query_params.get(parameter)
             if value:
@@ -640,6 +642,10 @@ class OutJobViewSet(JobClaimMixin, SearchableModelViewSet):
     serializer_class = OutJobSerializer
     search_fields = ('job_number', 'customer_name', 'contact_number', 'vendor', 'job_type', 'invoice_no')
 
+    @action(detail=True, methods=('post',), url_path='start')
+    def start(self, request, pk=None):
+        return Response({'detail': 'Out Jobs do not have a Start action.'}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
     @action(detail=False, methods=('get',), url_path='create-options')
     def create_options(self, request):
         users = [
@@ -671,12 +677,17 @@ class OutJobViewSet(JobClaimMixin, SearchableModelViewSet):
             return Response(self.get_serializer(job).data)
         if job.status == OutJob.Status.COMPLETED:
             return Response({'detail': 'A completed Out Job cannot be cancelled.'}, status=status.HTTP_409_CONFLICT)
+        if job.status == OutJob.Status.IN_PROGRESS and (
+            job.payment_status == 'paid' or job.vendor_payment_status == 'paid'
+        ):
+            return Response({'detail': 'An in-progress Out Job with completed customer or vendor payment cannot be cancelled.'}, status=status.HTTP_409_CONFLICT)
         job.status = OutJob.Status.CANCELLED
         job.save(update_fields=('status', 'updated_at'))
         return Response(self.get_serializer(job).data)
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        queryset = queryset.exclude(delivery__status__in=(Delivery.Status.READY, Delivery.Status.DISPATCHED, Delivery.Status.DELIVERED))
         for parameter in ('status', 'priority', 'payment_status', 'vendor_payment_status'):
             value = self.request.query_params.get(parameter)
             if value:
@@ -801,6 +812,12 @@ class MachineCounterViewSet(SearchableModelViewSet):
             counter = counters.get(machine.pk)
             actual = counter.actual_clicks if counter else None
             job_clicks = booked.get(machine.pk, 0)
+            machine_jobs = list(InJob.objects.filter(
+                machine_id=machine.pk, job_date=count_date,
+            ).select_related('printing_operator').order_by('created_at'))
+            starting_count = counter.morning_count if counter else (
+                previous_counters[machine.pk].ending_count if machine.pk in previous_counters else None
+            )
             rows.append({
                 'machine_id': machine.pk,
                 'machine_name': machine.name,
@@ -810,14 +827,29 @@ class MachineCounterViewSet(SearchableModelViewSet):
                 'status_reason': machine.status_reason,
                 'last_changed': latest_status.get(machine.pk, machine.updated_at),
                 'counter_id': counter.pk if counter else None,
-                'morning_count': counter.morning_count if counter else (
-                    previous_counters[machine.pk].ending_count if machine.pk in previous_counters else None
-                ),
+                'morning_count': starting_count,
                 'ending_count': counter.ending_count if counter else None,
                 'actual_clicks': actual,
                 'job_clicks_booked': job_clicks,
                 'difference': actual - job_clicks if actual is not None else None,
                 'operator_display': counter.operator.username if counter else '',
+                'total_clicks_today': job_clicks,
+                'current_machine_count': starting_count + job_clicks if starting_count is not None else None,
+                'jobs_printed': len(machine_jobs),
+                'last_updated': max((job.updated_at for job in machine_jobs), default=counter.updated_at if counter else machine.updated_at),
+                'jobs': [
+                    {
+                        'id': job.id,
+                        'job_number': job.job_number,
+                        'job_name': job.job_name or job.file_name or job.job_type,
+                        'machine_name': machine.name,
+                        'printing_operator': (job.printing_operator.get_full_name() or job.printing_operator.username) if job.printing_operator_id else '',
+                        'click_count': job.click_count,
+                        'created_at': job.created_at,
+                        'updated_at': job.updated_at,
+                    }
+                    for job in machine_jobs
+                ],
             })
         return Response({'date': count_date, 'machines': rows})
 
@@ -1047,7 +1079,7 @@ class CashAccountViewSet(SearchableModelViewSet):
         return super().get_queryset()
 
 
-class CustomerPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class CustomerPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     queryset = CustomerPayment.objects.select_related('in_job', 'out_job', 'cash_account', 'recorded_by')
 
     def get_serializer_class(self):
@@ -1096,8 +1128,28 @@ class CustomerPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mix
             return Response(detail, status=status.HTTP_400_BAD_REQUEST)
         return Response(CustomerPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
 
+    def update(self, request, *args, **kwargs):
+        payment = self.get_object()
+        serializer = CustomerPaymentSerializer(payment, data=request.data, partial=kwargs.get('partial', False), context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        try:
+            data = serializer.validated_data
+            payment = edit_customer_payment(
+                payment=payment, user=request.user,
+                amount=data.get('amount', payment.amount),
+                payment_type=data.get('payment_type', payment.payment_type),
+                payment_date=data.get('payment_date', payment.payment_date),
+                method=data.get('method', payment.method),
+                reference_no=data.get('reference_no', payment.reference_no),
+                cash_account=data.get('cash_account', payment.cash_account),
+            )
+        except DjangoValidationError as exc:
+            detail = getattr(exc, 'message_dict', None) or {'detail': exc.messages}
+            return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+        return Response(CustomerPaymentSerializer(payment, context={'request': request}).data)
 
-class VendorPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+
+class VendorPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     queryset = VendorPayment.objects.select_related('out_job', 'cash_account', 'recorded_by')
 
     def get_serializer_class(self):
@@ -1134,6 +1186,25 @@ class VendorPaymentViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixin
             detail = getattr(exc, 'message_dict', None) or {'detail': exc.messages}
             return Response(detail, status=status.HTTP_400_BAD_REQUEST)
         return Response(VendorPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        payment = self.get_object()
+        serializer = VendorPaymentSerializer(payment, data=request.data, partial=kwargs.get('partial', False), context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        try:
+            data = serializer.validated_data
+            payment = edit_vendor_payment(
+                payment=payment, user=request.user,
+                amount=data.get('amount', payment.amount),
+                payment_date=data.get('payment_date', payment.payment_date),
+                method=data.get('method', payment.method),
+                reference_no=data.get('reference_no', payment.reference_no),
+                cash_account=data.get('cash_account', payment.cash_account),
+            )
+        except DjangoValidationError as exc:
+            detail = getattr(exc, 'message_dict', None) or {'detail': exc.messages}
+            return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+        return Response(VendorPaymentSerializer(payment, context={'request': request}).data)
 
 
 class CashTransactionViewSet(viewsets.ReadOnlyModelViewSet):

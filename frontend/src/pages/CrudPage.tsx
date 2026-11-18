@@ -87,6 +87,10 @@ function formatDate(val: unknown) {
   }
 }
 
+function formatMoney(val: unknown) {
+  return `₹${Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
 const outJobPriorityBadgeColors: Record<string, { bg: string; color: string }> = {
   normal: { bg: '#0ea5e9', color: '#fff' },
   high: { bg: '#f59e0b', color: '#fff' },
@@ -586,7 +590,12 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                     <TableCell>QUANTITY</TableCell>
                     <TableCell>STATUS</TableCell>
                     <TableCell>DELIVERY DATE</TableCell>
-                    {canShowPayments && <TableCell>PAYMENT</TableCell>}
+                     {canShowPayments && <>
+                       <TableCell>CUSTOMER PAID</TableCell>
+                       <TableCell>CUSTOMER PAYMENT</TableCell>
+                       <TableCell>VENDOR PAID</TableCell>
+                       <TableCell>VENDOR PAYMENT</TableCell>
+                     </>}
                     <TableCell align="center">ACTIONS</TableCell>
                   </TableRow>
                 ) : (
@@ -603,6 +612,8 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                     const sBadge = outJobStatusBadgeColors[statusKey] || { bg: '#64748b', color: '#fff', label: humanize(row.status) }
                     const paymentKey = String(row.payment_status || 'pending').toLowerCase()
                     const payBadge = outJobPaymentBadgeColors[paymentKey] || { bg: '#ef4444', color: '#fff', label: 'Pending' }
+                     const vendorPaymentKey = String(row.vendor_payment_status || 'pending').toLowerCase()
+                     const vendorPayBadge = outJobPaymentBadgeColors[vendorPaymentKey] || { bg: '#ef4444', color: '#fff', label: 'Pending' }
                     const customerName = String(row.customer_name || '—')
                     const avatarLetter = (customerName !== '—' ? customerName[0] : 'C').toUpperCase()
 
@@ -654,8 +665,11 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                         <TableCell sx={{ color: '#475569', fontWeight: 500, whiteSpace: 'nowrap' }}>
                           {formatDate(row.delivery_date)}
                         </TableCell>
-                        {canShowPayments && (
-                          <TableCell>
+                         {canShowPayments && <>
+                           <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                             {formatMoney(row.advance)}
+                           </TableCell>
+                           <TableCell>
                             <Chip
                               size="small"
                               label={payBadge.label}
@@ -670,7 +684,13 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                               }}
                             />
                           </TableCell>
-                        )}
+                           <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                             {formatMoney(row.vendor_advance)}
+                           </TableCell>
+                           <TableCell>
+                             <Chip size="small" label={vendorPayBadge.label} sx={{ bgcolor: vendorPayBadge.bg, color: vendorPayBadge.color, fontWeight: 700, fontSize: 11.5, borderRadius: '12px', px: 0.5, height: 24 }} />
+                           </TableCell>
+                         </>}
                         <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
                           <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}>
                             <Tooltip title="View Details">
@@ -742,7 +762,7 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                               <span>
                                 <IconButton
                                 size="small"
-                                disabled={row.status === 'cancelled' || cancelOutJobMutation.isPending}
+                                 disabled={row.status === 'cancelled' || (row.status === 'in_progress' && (row.payment_status === 'paid' || row.vendor_payment_status === 'paid')) || cancelOutJobMutation.isPending}
                                 onClick={() => {
                                   if (window.confirm(`Cancel Out Job ${String(row.job_number || '')} for ${String(row.customer_name || 'this customer')}?`)) {
                                     cancelOutJobMutation.mutate(Number(row.id))
@@ -894,6 +914,11 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
           error={saveError}
           onClose={() => { setDialogOpen(false); setEditing(null) }}
           onSave={(data) => mutation.mutate(data)}
+          onRecordPayment={canShowPayments ? (rec, target) => {
+            setDialogOpen(false)
+            setEditing(null)
+            setPaymentJob({ job: rec, kind: 'out', initialTarget: target })
+          } : undefined}
         />
       ) : (
         <RecordDialog

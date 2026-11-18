@@ -22,6 +22,11 @@ interface MachineDailyRow {
   job_clicks_booked: number
   difference: number | null
   operator_display: string
+  total_clicks_today: number
+  current_machine_count: number | null
+  jobs_printed: number
+  last_updated: string
+  jobs: Array<{ id: number; job_number: string; job_name: string; machine_name: string; printing_operator: string; click_count: number; created_at: string; updated_at: string }>
 }
 
 interface CounterHistoryRow {
@@ -115,13 +120,28 @@ export function MachineDailyOverview() {
       {!countersRecorded && !daily.isLoading && <Typography color="text.secondary" fontSize={13} textAlign="center" sx={{ py: 1 }}>No machine counters recorded for this date. In Job clicks are still shown below.</Typography>}
       {error && <Alert severity="error" sx={{ m: 1.5 }}>{error}</Alert>}
       <TableContainer><Table size="small" sx={{ minWidth: 800 }}>
-        <TableHead><TableRow><TableCell>Machine</TableCell><TableCell>Operator</TableCell><TableCell align="right">Morning</TableCell><TableCell align="right">Ending</TableCell><TableCell align="right">Actual clicks</TableCell><TableCell align="right">Overall clicks</TableCell></TableRow></TableHead>
+        <TableHead><TableRow><TableCell>Machine</TableCell><TableCell>Operator</TableCell><TableCell align="right">Morning</TableCell><TableCell align="right">Ending</TableCell><TableCell align="right">Clicks today</TableCell><TableCell align="right">Current count</TableCell><TableCell align="right">Jobs printed</TableCell></TableRow></TableHead>
         <TableBody>{machines.map((row) => <TableRow key={row.machine_id} hover>
           <TableCell>{row.machine_name}</TableCell><TableCell>{row.operator_display || '—'}</TableCell>
           <TableCell align="right">{number(row.morning_count)}</TableCell><TableCell align="right">{number(row.ending_count)}</TableCell>
-          <TableCell align="right">{number(row.actual_clicks)}</TableCell><TableCell align="right" sx={{ fontWeight: 800 }}>{number(row.job_clicks_booked)}</TableCell>
+          <TableCell align="right" sx={{ fontWeight: 800 }}>{number(row.total_clicks_today)}</TableCell><TableCell align="right" sx={{ fontWeight: 800 }}>{number(row.current_machine_count)}</TableCell><TableCell align="right">{row.jobs_printed}</TableCell>
         </TableRow>)}
-          {!daily.isLoading && machines.length === 0 && <TableRow><TableCell colSpan={6} align="center">No machine usage found.</TableCell></TableRow>}
+          {!daily.isLoading && machines.length === 0 && <TableRow><TableCell colSpan={7} align="center">No machine usage found.</TableCell></TableRow>}
+        </TableBody>
+      </Table></TableContainer>
+    </Card>
+
+    <Card sx={{ overflow: 'hidden' }}>
+      <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Typography fontWeight={800}>Job-wise Click History</Typography>
+        <Typography color="text.secondary" fontSize={12}>Every click contribution is calculated from the In Job, so edits and machine changes are reflected without duplicate entries.</Typography>
+      </Box>
+      <TableContainer><Table size="small" sx={{ minWidth: 850 }}>
+        <TableHead><TableRow><TableCell>Job</TableCell><TableCell>Job name</TableCell><TableCell>Machine</TableCell><TableCell>Printing operator</TableCell><TableCell align="right">Clicks</TableCell><TableCell>Last updated</TableCell></TableRow></TableHead>
+        <TableBody>{machines.flatMap((machine) => machine.jobs).map((job) => <TableRow key={job.id} hover>
+          <TableCell>{job.job_number}</TableCell><TableCell>{job.job_name || '—'}</TableCell><TableCell>{job.machine_name}</TableCell><TableCell>{job.printing_operator || '—'}</TableCell><TableCell align="right" sx={{ fontWeight: 800 }}>{number(job.click_count)}</TableCell><TableCell>{dateTimeLabel(job.updated_at)}</TableCell>
+        </TableRow>)}
+          {!daily.isLoading && machines.every((machine) => machine.jobs.length === 0) && <TableRow><TableCell colSpan={6} align="center">No In-Job click entries for this date.</TableCell></TableRow>}
         </TableBody>
       </Table></TableContainer>
     </Card>

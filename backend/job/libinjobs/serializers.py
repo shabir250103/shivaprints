@@ -383,6 +383,8 @@ class InJobSerializer(serializers.ModelSerializer):
     invoice_id = serializers.SerializerMethodField()
     invoice_no = serializers.SerializerMethodField()
     machine_name = serializers.SerializerMethodField()
+    printing_operator_display = serializers.SerializerMethodField()
+    wastage_operator_display = serializers.SerializerMethodField()
     current_count = serializers.IntegerField(read_only=True)
     priority_label = serializers.SerializerMethodField()
     side_label = serializers.SerializerMethodField()
@@ -429,6 +431,12 @@ class InJobSerializer(serializers.ModelSerializer):
     def get_machine_name(self, job):
         return job.machine.name if job.machine_id else ''
 
+    def get_printing_operator_display(self, job):
+        return (job.printing_operator.get_full_name() or job.printing_operator.username) if job.printing_operator_id else ''
+
+    def get_wastage_operator_display(self, job):
+        return (job.wastage_operator.get_full_name() or job.wastage_operator.username) if job.wastage_operator_id else ''
+
     def get_priority_label(self, job):
         return job.priority_option.label if job.priority_option_id else job.get_priority_display()
 
@@ -465,6 +473,10 @@ class InJobSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'job_type': 'Job type is required.'})
             if attrs.get('advance', 0) > attrs.get('total_amount', 0):
                 raise serializers.ValidationError({'advance': 'Advance cannot exceed the total amount.'})
+        wastage_count = attrs.get('wastage_count', self.instance.wastage_count if self.instance else 0)
+        wastage_operator = attrs.get('wastage_operator', self.instance.wastage_operator if self.instance else None)
+        if wastage_count > 0 and not wastage_operator:
+            raise serializers.ValidationError({'wastage_operator': 'Select the employee responsible for the wastage.'})
         if attrs.get('printing_status') == InJob.ProductionStatus.IN_PROGRESS and not (self.instance and self.instance.printing_status == InJob.ProductionStatus.IN_PROGRESS):
             raise serializers.ValidationError({'printing_status': 'Accept and start this job from the job board first.'})
         printing = attrs.get('printing_status', self.instance.printing_status if self.instance else InJob.ProductionStatus.PENDING)
@@ -662,6 +674,10 @@ class OutJobSerializer(serializers.ModelSerializer):
         if attrs.get('status') == OutJob.Status.IN_PROGRESS and not (self.instance and self.instance.status == OutJob.Status.IN_PROGRESS):
             raise serializers.ValidationError({'status': 'Accept and start this job from the job board first.'})
         new_status = attrs.get('status', self.instance.status if self.instance else OutJob.Status.PENDING)
+        if self.instance and new_status == OutJob.Status.CANCELLED and self.instance.status == OutJob.Status.IN_PROGRESS and (
+            self.instance.payment_status == 'paid' or self.instance.vendor_payment_status == 'paid'
+        ):
+            raise serializers.ValidationError({'status': 'An in-progress Out Job with completed customer or vendor payment cannot be cancelled.'})
         if new_status == OutJob.Status.COMPLETED and not (self.instance and self.instance.work_started_at):
             raise serializers.ValidationError({'status': 'Start work before completing this job.'})
         if self.instance and self.instance.status == OutJob.Status.COMPLETED and new_status != OutJob.Status.COMPLETED:
@@ -1150,6 +1166,7 @@ class CustomerPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomerPayment
         fields = '__all__'
+        read_only_fields = ('id', 'in_job', 'out_job', 'branch', 'recorded_by', 'created_at', 'updated_at')
 
     def get_job_number(self, obj):
         return obj.job.job_number
@@ -1188,6 +1205,7 @@ class VendorPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = VendorPayment
         fields = '__all__'
+        read_only_fields = ('id', 'out_job', 'branch', 'recorded_by', 'created_at', 'updated_at')
 
 
 class VendorPaymentCreateSerializer(serializers.Serializer):

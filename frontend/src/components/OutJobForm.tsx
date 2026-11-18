@@ -5,6 +5,7 @@ import { api, apiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import type { ApiRecord } from '../types'
 import { InJobQuickAddDialog } from './InJobQuickAddDialog'
+import PaymentsRounded from '@mui/icons-material/PaymentsRounded'
 
 type Customer = { id: number; name: string; mobile: string }
 type Options = { customers: Customer[]; suppliers?: { id: number; name: string }[] }
@@ -50,8 +51,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   </Box>
 }
 
-export function OutJobForm({ row, pending, error, onClose, onSave, dialog = false }: {
-  row?: ApiRecord; pending: boolean; error: string; onClose: () => void; onSave: (payload: Record<string, unknown>) => void; dialog?: boolean
+export function OutJobForm({ row, pending, error, onClose, onSave, dialog = false, onRecordPayment }: {
+  row?: ApiRecord; pending: boolean; error: string; onClose: () => void; onSave: (payload: Record<string, unknown>) => void; dialog?: boolean;
+  onRecordPayment?: (record: ApiRecord, target?: 'customer' | 'vendor') => void
 }) {
   const { auth, can } = useAuth()
   const admin = Boolean(auth?.user.is_superuser)
@@ -72,6 +74,8 @@ export function OutJobForm({ row, pending, error, onClose, onSave, dialog = fals
   const customerBalance = amount('total_amount') - amount('advance')
   const supplierBalance = amount('vendor_total_payment') - amount('vendor_advance')
   const profit = amount('total_amount') - amount('supplier_expenses') - amount('expenses')
+  const paymentCompleted = values.payment_status === 'paid' || values.vendor_payment_status === 'paid'
+  const cannotCancel = values.status === 'in_progress' && paymentCompleted
   const paymentLabel = (paid: number, total: number) => paid > 0 ? (paid === total ? 'Paid' : 'Partial') : 'Pending'
   const customers = [...(options.data?.customers || []), ...(createdCustomer && !options.data?.customers.some((item) => item.id === createdCustomer.id) ? [createdCustomer] : [])]
   const submit = (event: React.FormEvent) => {
@@ -80,6 +84,9 @@ export function OutJobForm({ row, pending, error, onClose, onSave, dialog = fals
     setValidation('')
     const payload: Record<string, unknown> = {}
     Object.entries(values).forEach(([key, value]) => {
+      // Posted customer/vendor advances are ledger-backed. They must be changed
+      // through the Record Payment workflow, not by saving the job form.
+      if (row && ['advance', 'vendor_advance', 'payment_status', 'vendor_payment_status', 'customer_payment_method', 'vendor_payment_method'].includes(key)) return
       if (key === 'customer' || key === 'supplier') {
         if (value) payload[key] = Number(value)
         else if (row) payload[key] = null
@@ -131,7 +138,7 @@ export function OutJobForm({ row, pending, error, onClose, onSave, dialog = fals
             <MenuItem value="in_progress">In Progress</MenuItem>
             <MenuItem value="ready">Ready</MenuItem>
             <MenuItem value="completed">Completed</MenuItem>
-            <MenuItem value="cancelled">Cancelled</MenuItem>
+             <MenuItem value="cancelled" disabled={cannotCancel}>Cancelled{cannotCancel ? ' (payment completed)' : ''}</MenuItem>
           </TextField>
         ) : (
           <TextField select label="Status" value="pending" fullWidth size="small" helperText="Starts pending. Accept and start it on the Job Board; completed jobs move to Delivery.">
@@ -161,7 +168,8 @@ export function OutJobForm({ row, pending, error, onClose, onSave, dialog = fals
           <TextField label="Balance" value={customerBalance.toFixed(2)} size="small" slotProps={{ input: { readOnly: true } }} />
           {money('expenses', 'Expenses')}
           <TextField label="Profit" value={profit.toFixed(2)} size="small" slotProps={{ input: { readOnly: true } }} />
-          <TextField label="Payment Status" value={paymentLabel(amount('advance'), amount('total_amount'))} slotProps={{ input: { readOnly: true } }} helperText="Calculated from recorded payments." />{field('invoice_no', 'Invoice No')}{money('gst_percent', 'GST %')}
+           <TextField label="Payment Status" value={paymentLabel(amount('advance'), amount('total_amount'))} slotProps={{ input: { readOnly: true } }} helperText="Calculated from recorded payments." />{field('invoice_no', 'Invoice No')}{money('gst_percent', 'GST %')}
+           {row?.id && onRecordPayment && <Button type="button" variant="outlined" startIcon={<PaymentsRounded />} onClick={() => onRecordPayment(row, 'customer')} sx={{ alignSelf: 'center' }}>Record customer payment</Button>}
         </Section>
         <Section title="Supplier Payment (Admin Only)">
           {money('vendor_total_payment', 'Total Payment (to Supplier)')}{money('vendor_advance', 'Advance (to Supplier)')}
@@ -172,7 +180,8 @@ export function OutJobForm({ row, pending, error, onClose, onSave, dialog = fals
             { value: 'Cheque', label: '📄 Cheque' },
           ])}
           <TextField label="Balance (Owed to Supplier)" value={supplierBalance.toFixed(2)} size="small" slotProps={{ input: { readOnly: true } }} />
-          <TextField label="Supplier Payment Status" value={paymentLabel(amount('vendor_advance'), amount('vendor_total_payment'))} slotProps={{ input: { readOnly: true } }} helperText="Calculated from recorded payments." />
+           <TextField label="Supplier Payment Status" value={paymentLabel(amount('vendor_advance'), amount('vendor_total_payment'))} slotProps={{ input: { readOnly: true } }} helperText="Calculated from recorded payments." />
+           {row?.id && onRecordPayment && <Button type="button" variant="outlined" startIcon={<PaymentsRounded />} onClick={() => onRecordPayment(row, 'vendor')} sx={{ alignSelf: 'center' }}>Record vendor payment</Button>}
           <Typography color="text.secondary" fontSize={12} sx={{ gridColumn: '1 / -1' }}>Supplier payment is separate from what the customer owes us.</Typography>
         </Section>
       </>}
