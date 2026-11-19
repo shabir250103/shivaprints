@@ -398,6 +398,9 @@ class InJobSerializer(serializers.ModelSerializer):
         payments = list(job.payments.all())
         return payments[0].method if payments else ''
 
+    def get_vendor_contact(self, job):
+        return job.supplier.mobile if job.supplier_id and job.supplier.mobile else ''
+
     def get_assigned_staff_display(self, job):
         return ', '.join(user.get_full_name() or user.username for user in job.assigned_users.all())
 
@@ -576,6 +579,7 @@ class InJobSerializer(serializers.ModelSerializer):
 
 class OutJobSerializer(serializers.ModelSerializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.filter(is_active=True), required=False, allow_null=True)
+    vendor_contact = serializers.SerializerMethodField()
     balance = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     profit = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     vendor_balance = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)

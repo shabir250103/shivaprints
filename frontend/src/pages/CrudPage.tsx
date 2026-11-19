@@ -618,7 +618,7 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                     const avatarLetter = (customerName !== '—' ? customerName[0] : 'C').toUpperCase()
 
                     return (
-                      <TableRow key={row.id} hover sx={{ '& td': { py: 1.5, fontSize: 13.5 } }}>
+                      <TableRow key={row.id} hover onDoubleClick={() => openEdit(row)} sx={{ '& td': { py: 1.5, fontSize: 13.5 }, cursor: 'pointer' }}>
                         <TableCell padding="checkbox">
                           <Checkbox
                             checked={selectedJobIds.includes(Number(row.id))}
@@ -810,7 +810,7 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                   })
                 ) : (
                   displayRows.map((row) => (
-                    <TableRow key={row.id} hover>
+                    <TableRow key={row.id} hover onDoubleClick={() => ['in-jobs', 'out-jobs'].includes(resourceKey) && !config.readOnly && openEdit(row)} sx={['in-jobs', 'out-jobs'].includes(resourceKey) && !config.readOnly ? { cursor: 'pointer' } : undefined}>
                       {resourceKey === 'in-jobs' && auth?.user.is_superuser && <TableCell padding="checkbox"><Checkbox checked={selectedJobIds.includes(Number(row.id))} disabled={Boolean(row.accepted_by) || row.printing_status !== 'pending'} onChange={(event) => setSelectedJobIds((current) => event.target.checked ? [...new Set([...current, Number(row.id)])] : current.filter((id) => id !== Number(row.id)))} /></TableCell>}
                       {columns.map((column, index) => <TableCell key={column.key} sx={{ fontWeight: index === 0 ? 700 : 400, whiteSpace: 'nowrap' }}><CellValue value={row[column.key]} column={column} /></TableCell>)}
                       {!config.readOnly && <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
@@ -970,8 +970,39 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
           )}
         </DialogTitle>
         <DialogContent dividers>
-          {viewingOutJob && (
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2.5 }}>
+          {viewingOutJob && (<>
+            <Box sx={{ display: 'grid', gap: 1.25 }}>
+              <Typography variant="subtitle2" fontWeight={800}>Job Details</Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(5, 1fr)' }, gap: 1, pb: 1.25 }}>
+                {[
+                  ['Job ID', viewingOutJob.job_number], ['Job Type', viewingOutJob.job_type], ['Quantity', viewingOutJob.quantity],
+                  ['Status', humanize(viewingOutJob.status || 'pending')], ['Delivery Date', formatDate(viewingOutJob.delivery_date)],
+                ].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary" fontWeight={700}>{String(label)}</Typography><Typography variant="body2" fontWeight={650}>{String(value ?? '—')}</Typography></Box>)}
+              </Box>
+              {canShowPayments && <>
+                <Box sx={{ borderTop: '3px solid #1e293b', pt: 1.25 }}>
+                  <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>Customer Details</Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(6, 1fr)' }, gap: 1 }}>
+                    {[
+                      ['Customer Name', viewingOutJob.customer_name], ['Contact', viewingOutJob.contact_number],
+                      ['Payment Amount', viewingOutJob.total_amount], ['Paid Amount', viewingOutJob.advance], ['Balance Amount', viewingOutJob.balance],
+                    ].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary" fontWeight={700}>{String(label)}</Typography><Typography variant="body2" fontWeight={650}>{['Payment Amount', 'Paid Amount', 'Balance Amount'].includes(String(label)) ? `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : String(value || '—')}</Typography></Box>)}
+                    <Box><Typography variant="caption" color="text.secondary" fontWeight={700}>Payment Status</Typography><Chip size="small" label={humanize(viewingOutJob.payment_status || 'pending')} color={String(viewingOutJob.payment_status) === 'paid' ? 'success' : 'warning'} /></Box>
+                  </Box>
+                </Box>
+                <Box sx={{ borderTop: '3px solid #1e293b', pt: 1.25 }}>
+                  <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>Vendor Details</Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(6, 1fr)' }, gap: 1 }}>
+                    {[
+                      ['Vendor Name', viewingOutJob.vendor], ['Contact', viewingOutJob.vendor_contact],
+                      ['Total Cost', viewingOutJob.vendor_total_payment || viewingOutJob.vendor_cost], ['Paid Amount', viewingOutJob.vendor_advance], ['Balance Amount', viewingOutJob.vendor_balance],
+                    ].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary" fontWeight={700}>{String(label)}</Typography><Typography variant="body2" fontWeight={650}>{['Total Cost', 'Paid Amount', 'Balance Amount'].includes(String(label)) ? `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : String(value || '—')}</Typography></Box>)}
+                    <Box><Typography variant="caption" color="text.secondary" fontWeight={700}>Payment Status</Typography><Chip size="small" label={humanize(viewingOutJob.vendor_payment_status || 'pending')} color={String(viewingOutJob.vendor_payment_status) === 'paid' ? 'success' : 'warning'} /></Box>
+                  </Box>
+                </Box>
+              </>}
+            </Box>
+            <Box sx={{ display: 'none' }}>
               <Box>
                 <Typography variant="caption" color="text.secondary" fontWeight={700}>JOB NUMBER</Typography>
                 <Typography variant="body1" fontWeight={700}>{String(viewingOutJob.job_number || '—')}</Typography>
@@ -1072,7 +1103,7 @@ export function CrudPage({ resourceKey, embedded = false }: { resourceKey: strin
                 </>
               )}
             </Box>
-          )}
+          </>)}
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 2 }}>
           {Boolean(viewingOutJob?.invoice_id) && (
